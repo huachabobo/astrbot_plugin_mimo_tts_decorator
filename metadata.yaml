@@ -2,7 +2,7 @@ name: astrbot_plugin_mimo_tts_decorator
 display_name: MiMo TTS 装饰器
 author: huachabobo
 description: 使用 Xiaomi MiMo TTS 把 AstrBot 即将发送的纯文本回复转成 wav 语音，并支持 style、语速、官方示例风格的自动打标（规则/LLM）、独立朗读清洗开关与 warning 日志开关。
-version: 0.5.0
+version: 0.6.0
 repo: https://github.com/huachabobo/astrbot_plugin_mimo_tts_decorator
 support_platforms:
   - aiocqhttp

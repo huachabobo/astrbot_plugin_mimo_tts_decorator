@@ -207,9 +207,21 @@
     "hint": "可以自定义；若同时开启“更严格的 LLM 打标约束”，插件会在你的提示词后面再附加一段更强的硬约束。默认内置提示仍会做轻度口语化改造，避免文本直接念出来很奇怪。"
   },
   "temp_dir": {
-    "description": "临时音频目录",
+    "description": "临时音频目录（留空时自动使用 AstrBot 数据目录）",
     "type": "string",
-    "default": "/AstrBot/data/temp/mimo_tts"
+    "default": "",
+    "hint": "默认会自动使用 AstrBot 的 data/plugin_data/{plugin_name}/temp。旧版默认值 /AstrBot/data/temp/mimo_tts 也会自动迁移到这个目录。"
+  },
+  "cleanup_after_send": {
+    "description": "消息发送成功后自动删除本次生成的临时 wav",
+    "type": "bool",
+    "default": true
+  },
+  "temp_file_retention_hours": {
+    "description": "启动时清理超过多少小时的旧 wav 文件",
+    "type": "int",
+    "default": 24,
+    "hint": "用于清理异常退出后遗留的历史文件。设为 0 或负数可关闭启动清理。"
   },
   "timeout_seconds": {
     "description": "MiMo HTTP 超时（秒）",

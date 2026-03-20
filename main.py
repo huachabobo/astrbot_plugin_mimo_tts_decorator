@@ -1,26 +1,134 @@
 import base64
 import os
 import re
+import time
 import uuid
+from pathlib import Path
 from typing import List
 
+import astrbot.api.message_components as Comp
 import httpx
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
-import astrbot.api.message_components as Comp
+
+try:
+    from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+except Exception:  # 兼容旧版 AstrBot 或文档工具环境
+    get_astrbot_data_path = None
+
+
+PLUGIN_NAME = "astrbot_plugin_mimo_tts_decorator"
+LEGACY_TEMP_DIR = "/AstrBot/data/temp/mimo_tts"
+EVENT_TEMP_FILES_ATTR = "_mimo_tts_temp_files"
 
 
 class MimoTTSDecorator(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.temp_dir = self.config.get("temp_dir", "/AstrBot/data/temp/mimo_tts")
+        self.temp_dir = self._resolve_temp_dir()
         os.makedirs(self.temp_dir, exist_ok=True)
-        logger.info("[mimo_tts_decorator] loaded v0.5.0")
+        self._cleanup_stale_temp_files()
+        logger.info("[mimo_tts_decorator] loaded v0.6.0")
 
     def _cfg(self, key: str, default=None):
         return self.config.get(key, default)
+
+    def _plugin_name(self) -> str:
+        return getattr(self, "name", "") or PLUGIN_NAME
+
+    def _default_temp_dir(self) -> str:
+        if get_astrbot_data_path is not None:
+            try:
+                data_path = Path(get_astrbot_data_path())
+                return str(data_path / "plugin_data" / self._plugin_name() / "temp")
+            except Exception as e:
+                logger.warning(
+                    "[mimo_tts_decorator] resolve AstrBot data path failed, "
+                    f"fallback to cwd: {e}"
+                )
+        return os.path.join(
+            os.getcwd(), "data", "plugin_data", self._plugin_name(), "temp"
+        )
+
+    def _resolve_temp_dir(self) -> str:
+        configured = (self.config.get("temp_dir", "") or "").strip()
+        if not configured or configured == LEGACY_TEMP_DIR:
+            return self._default_temp_dir()
+        return configured
+
+    def _cleanup_stale_temp_files(self):
+        retention_hours = int(self._cfg("temp_file_retention_hours", 24))
+        if retention_hours <= 0:
+            return
+
+        expire_before = time.time() - retention_hours * 3600
+        removed = 0
+        for entry in os.scandir(self.temp_dir):
+            if not entry.is_file():
+                continue
+            if not entry.name.startswith("mimo_tts_") or not entry.name.endswith(
+                ".wav"
+            ):
+                continue
+            try:
+                if entry.stat().st_mtime > expire_before:
+                    continue
+                os.remove(entry.path)
+                removed += 1
+            except FileNotFoundError:
+                continue
+            except Exception as e:
+                logger.warning(
+                    "[mimo_tts_decorator] cleanup stale temp file failed: "
+                    f"{entry.path}, err={e}"
+                )
+        if removed:
+            logger.info(f"[mimo_tts_decorator] cleaned {removed} stale temp wav files")
+
+    def _track_temp_file(self, event: AstrMessageEvent, wav_path: str):
+        tracked = getattr(event, EVENT_TEMP_FILES_ATTR, None)
+        if tracked is None:
+            tracked = []
+            setattr(event, EVENT_TEMP_FILES_ATTR, tracked)
+        if wav_path not in tracked:
+            tracked.append(wav_path)
+
+    def _make_record(self, event: AstrMessageEvent, wav_path: str) -> Comp.Record:
+        self._track_temp_file(event, wav_path)
+        return Comp.Record(file=wav_path, url=wav_path)
+
+    def _replace_plain_with_record(self, chain, record: Comp.Record):
+        new_chain = []
+        inserted = False
+        for comp in chain:
+            if isinstance(comp, Comp.Plain):
+                if not inserted:
+                    new_chain.append(record)
+                    inserted = True
+                continue
+            new_chain.append(comp)
+        if not inserted:
+            new_chain.append(record)
+        return new_chain
+
+    def _cleanup_tracked_event_files(self, event: AstrMessageEvent):
+        tracked = list(dict.fromkeys(getattr(event, EVENT_TEMP_FILES_ATTR, []) or []))
+        if not tracked:
+            return
+
+        for path in tracked:
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+            except FileNotFoundError:
+                continue
+            except Exception as e:
+                logger.warning(
+                    f"[mimo_tts_decorator] remove temp wav failed: {path}, err={e}"
+                )
+        setattr(event, EVENT_TEMP_FILES_ATTR, [])
 
     def _log_llm_tagged_text(self, tagged_text: str):
         if not self._cfg("log_llm_tagged_text_warning", False):
@@ -81,13 +189,19 @@ class MimoTTSDecorator(Star):
             return s
 
         s = s.replace("@全体成员", "大家").replace("@全体", "大家")
-        s = re.sub(r"@[^\s]+", "", s)
+        s = re.sub(
+            r"@[^\s@，。！？!,,:：;；、]{1,24}(?=$|[\s，。！？!,,:：;；、])", "", s
+        )
         s = s.replace("_", "")
         s = re.sub(r"\b\d{6,}\b", "某个号码", s)
 
         def _mask_token(m):
             tok = m.group(0)
-            if len(tok) >= 10 and any(ch.isdigit() for ch in tok) and any(ch.isalpha() for ch in tok):
+            if (
+                len(tok) >= 10
+                and any(ch.isdigit() for ch in tok)
+                and any(ch.isalpha() for ch in tok)
+            ):
                 return "某位玩家"
             return tok
 
@@ -100,7 +214,9 @@ class MimoTTSDecorator(Star):
         if not s:
             return False
         head = s[:32]
-        return head.startswith("<style>") or head.startswith("（") or head.startswith("(")
+        return (
+            head.startswith("<style>") or head.startswith("（") or head.startswith("(")
+        )
 
     def _split_sentences(self, text: str) -> List[str]:
         text = self._normalize_text(text)
@@ -108,13 +224,13 @@ class MimoTTSDecorator(Star):
         if not text:
             return []
 
-        parts = re.split(r'([。！？!?；;…]+|\n+)', text)
+        parts = re.split(r"([。！？!?；;…]+|\n+)", text)
         out = []
         buf = ""
         for part in parts:
             if not part:
                 continue
-            if re.fullmatch(r'([。！？!?；;…]+|\n+)', part):
+            if re.fullmatch(r"([。！？!?；;…]+|\n+)", part):
                 buf += part
                 if buf.strip():
                     out.append(buf.strip())
@@ -173,16 +289,26 @@ class MimoTTSDecorator(Star):
             tags.append(breath_tag)
         if self._contains_any(s, ["呵", "苦笑", "自嘲", "无奈"]):
             tags.append(smile_tag)
-        if self._contains_any(s, ["等等", "等一下", "稍等", "先别急", "那个", "嗯", "呃"]):
+        if self._contains_any(
+            s, ["等等", "等一下", "稍等", "先别急", "那个", "嗯", "呃"]
+        ):
             tags.append(think_tag)
 
-        is_question = bool(re.search(r'[?？]+\s*$', s))
-        is_exclaim = bool(re.search(r'[!！]+\s*$', s))
-        has_urgent_words = self._contains_any(s, ["快", "赶紧", "马上", "快点", "来不及", "冲", "立刻"])
-        has_loud_words = self._contains_any(s, ["注意", "大家", "住手", "别动", "快跑", "快走", "喂", "老板"])
-        has_soft_words = self._contains_any(s, ["悄悄", "轻轻", "安静", "别怕", "慢慢来", "我在呢", "先别紧张"])
+        is_question = bool(re.search(r"[?？]+\s*$", s))
+        is_exclaim = bool(re.search(r"[!！]+\s*$", s))
+        has_urgent_words = self._contains_any(
+            s, ["快", "赶紧", "马上", "快点", "来不及", "冲", "立刻"]
+        )
+        has_loud_words = self._contains_any(
+            s, ["注意", "大家", "住手", "别动", "快跑", "快走", "喂", "老板"]
+        )
+        has_soft_words = self._contains_any(
+            s, ["悄悄", "轻轻", "安静", "别怕", "慢慢来", "我在呢", "先别紧张"]
+        )
 
-        profile = (self._cfg("auto_tag_profile", "catgirl_soft") or "catgirl_soft").strip()
+        profile = (
+            self._cfg("auto_tag_profile", "catgirl_soft") or "catgirl_soft"
+        ).strip()
         if profile == "catgirl_soft":
             if has_soft_words:
                 tags.append(quiet_tag)
@@ -226,7 +352,7 @@ class MimoTTSDecorator(Star):
             return s
 
         # 规范短标签括号
-        s = re.sub(r'\(([^()\n]{1,18})\)', lambda m: f"（{m.group(1).strip()}）", s)
+        s = re.sub(r"\(([^()\n]{1,18})\)", lambda m: f"（{m.group(1).strip()}）", s)
 
         replacements = {
             "（轻声）": "（小声）",
@@ -237,22 +363,31 @@ class MimoTTSDecorator(Star):
 
         # 对自动生成结果做收敛：抽象风格词不要作为正文标签直接念出来。
         risky_labels = [
-            "轻快", "轻盈灵动", "带一点撒娇", "元气一点", "句尾上扬",
-            "活泼一点", "温柔一点", "可爱", "俏皮", "撒娇", "软萌",
+            "轻快",
+            "轻盈灵动",
+            "带一点撒娇",
+            "元气一点",
+            "句尾上扬",
+            "活泼一点",
+            "温柔一点",
+            "可爱",
+            "俏皮",
+            "撒娇",
+            "软萌",
         ]
         for label in risky_labels:
-            s = re.sub(rf'（\s*{re.escape(label)}\s*）', '', s)
+            s = re.sub(rf"（\s*{re.escape(label)}\s*）", "", s)
 
-        s = re.sub(r'（\s*）', '', s)
-        s = re.sub(r'(）)\s+(（)', r'\1\2', s)
-        s = re.sub(r'\s{2,}', ' ', s).strip()
+        s = re.sub(r"（\s*）", "", s)
+        s = re.sub(r"(）)\s+(（)", r"\1\2", s)
+        s = re.sub(r"\s{2,}", " ", s).strip()
 
         # 开头最多保留 2 个标签
-        m = re.match(r'^((?:（[^（）\n]{1,24}）)+)(.*)$', s)
+        m = re.match(r"^((?:（[^（）\n]{1,24}）)+)(.*)$", s)
         if m:
-            tags = re.findall(r'（[^（）\n]{1,24}）', m.group(1))
+            tags = re.findall(r"（[^（）\n]{1,24}）", m.group(1))
             tags = self._dedupe_tags(tags)[:2]
-            s = ''.join(tags) + m.group(2)
+            s = "".join(tags) + m.group(2)
         return s.strip()
 
     def _auto_tag_rule_based(self, text: str) -> str:
@@ -261,7 +396,9 @@ class MimoTTSDecorator(Star):
         if not text:
             return ""
 
-        if self._cfg("auto_tag_skip_if_already_tagged", True) and self._looks_tagged(text):
+        if self._cfg("auto_tag_skip_if_already_tagged", True) and self._looks_tagged(
+            text
+        ):
             return text
 
         sentences = self._split_sentences(text)
@@ -279,12 +416,15 @@ class MimoTTSDecorator(Star):
             "\n\n额外硬性要求："
             "\n1. 只输出最终可朗读文本，不要前言、不要解释、不要总结、不要说测试感想。"
             "\n2. 允许轻度口语化和断句优化，但不要自由扩写，不要凭空新增内容。"
-            "\n3. 若需要括号标签，请尽量模仿 MiMo 官方细粒度示例，优先使用动作/状态/节奏类标签，例如："
+            "\n3. 若需要括号标签，请尽量模仿 MiMo 官方细粒度示例，"
+            "优先使用动作/状态/节奏类标签，例如："
             "（停顿）（小声）（沉默片刻）（长叹一口气）（语速加快）（苦笑）（咳嗽）（提高音量喊话）（紧张，深呼吸）。"
             "\n4. 不要输出抽象风格标签作为正文内容，例如："
             "（轻快）（轻盈灵动）（带一点撒娇）（元气一点）（句尾上扬）等。"
-            "\n5. 每段最多插入 0 到 2 处标签，优先放在句间或局部位置，不要在开头堆叠很多标签。"
-            "\n6. 删除或改写不适合朗读的内容：@提及、QQ号/UID 等长数字、过长 ID、下划线账号。"
+            "\n5. 每段最多插入 0 到 2 处标签，优先放在句间或局部位置，"
+            "不要在开头堆叠很多标签。"
+            "\n6. 删除或改写不适合朗读的内容："
+            "@提及、QQ号/UID 等长数字、过长 ID、下划线账号。"
         )
 
     def _default_tagger_prompt(self) -> str:
@@ -308,7 +448,11 @@ class MimoTTSDecorator(Star):
         base_url = (self._cfg("tagger_base_url", "") or "").strip()
         model = (self._cfg("tagger_model", "") or "").strip()
         if not api_key or not base_url or not model:
-            raise RuntimeError("自动标签 LLM 模式已开启，但 tagger_api_key / tagger_base_url / tagger_model 未配置完整")
+            raise RuntimeError(
+                "自动标签 LLM 模式已开启，但 "
+                "tagger_api_key / tagger_base_url / "
+                "tagger_model 未配置完整"
+            )
 
         payload = {
             "model": model,
@@ -362,7 +506,10 @@ class MimoTTSDecorator(Star):
                 return await self._auto_tag_llm(text)
             except Exception as e:
                 if self._cfg("auto_tag_llm_fallback_to_rule", True):
-                    logger.warning(f"[mimo_tts_decorator] auto tag llm failed, fallback to rule_based: {e}")
+                    logger.warning(
+                        "[mimo_tts_decorator] auto tag llm failed, "
+                        f"fallback to rule_based: {e}"
+                    )
                     return self._auto_tag_rule_based(text)
                 raise
         return text
@@ -396,8 +543,8 @@ class MimoTTSDecorator(Star):
             return ""
 
         style_value = self._build_style_value()
-        audio_tag_prefix = (self._cfg("audio_tag_prefix", "") or "")
-        audio_tag_suffix = (self._cfg("audio_tag_suffix", "") or "")
+        audio_tag_prefix = self._cfg("audio_tag_prefix", "") or ""
+        audio_tag_suffix = self._cfg("audio_tag_suffix", "") or ""
         style_tag = ""
 
         if style_value and not text.lstrip().startswith("<style>"):
@@ -445,7 +592,9 @@ class MimoTTSDecorator(Star):
                     "role": "user",
                     "content": self._cfg(
                         "dummy_user_prompt",
-                        "请把 assistant 提供的文本转成自然、清晰、稳定的普通话语音，不要改写 assistant 文本。",
+                        "请把 assistant 提供的文本转成自然、清晰、"
+                        "稳定的普通话语音，"
+                        "不要改写 assistant 文本。",
                     ),
                 },
                 {
@@ -471,8 +620,10 @@ class MimoTTSDecorator(Star):
 
         content_type = resp.headers.get("content-type", "")
         if resp.status_code >= 400:
+            body_preview = resp.text[:300]
             raise RuntimeError(
-                f"MiMo HTTP {resp.status_code}, content-type={content_type}, body={resp.text[:300]}"
+                f"MiMo HTTP {resp.status_code}, content-type={content_type}, "
+                f"body={body_preview}"
             )
 
         if "html" in content_type.lower():
@@ -511,7 +662,9 @@ class MimoTTSDecorator(Star):
     @filter.command("mimo_tts_preview_tagged")
     async def mimo_tts_preview_tagged(self, event: AstrMessageEvent, text: str):
         if not text or not text.strip():
-            yield event.plain_result("用法：/mimo_tts_preview_tagged 你好，这是一个测试")
+            yield event.plain_result(
+                "用法：/mimo_tts_preview_tagged 你好，这是一个测试"
+            )
             return
         try:
             tagged = await self._maybe_auto_tag(text.strip())
@@ -529,7 +682,7 @@ class MimoTTSDecorator(Star):
             clean_text = text.strip()
             wav_path = await self._call_mimo_tts(clean_text)
             self._log_tts_send_success("mimo_tts_test", wav_path, clean_text)
-            yield event.chain_result([Comp.Record(file=wav_path, url=wav_path)])
+            yield event.chain_result([self._make_record(event, wav_path)])
         except Exception as e:
             logger.exception("[mimo_tts_decorator] mimo_tts_test failed")
             yield event.plain_result(f"MiMo TTS 失败：{e}")
@@ -555,25 +708,36 @@ class MimoTTSDecorator(Star):
 
         max_chars = int(self._cfg("max_chars", 500))
         if len(text) > max_chars:
-            logger.warning(f"[mimo_tts_decorator] 文本过长，跳过 TTS: {len(text)} > {max_chars}")
+            logger.warning(
+                f"[mimo_tts_decorator] 文本过长，跳过 TTS: {len(text)} > {max_chars}"
+            )
             return
 
         try:
             wav_path = await self._call_mimo_tts(text)
         except Exception as e:
-            logger.exception(f"[mimo_tts_decorator] TTS failed, keep original text. err={e}")
+            logger.exception(
+                f"[mimo_tts_decorator] TTS failed, keep original text. err={e}"
+            )
             return
 
         mode = self._cfg("trigger_mode", "replace_plain")
+        record = self._make_record(event, wav_path)
         if mode == "append_record":
             if self._cfg("preserve_text_when_append", True):
-                chain.append(Comp.Record(file=wav_path, url=wav_path))
+                chain.append(record)
             else:
-                result.chain = [Comp.Record(file=wav_path, url=wav_path)]
+                result.chain = self._replace_plain_with_record(chain, record)
         else:
-            result.chain = [Comp.Record(file=wav_path, url=wav_path)]
+            result.chain = self._replace_plain_with_record(chain, record)
 
         self._log_tts_send_success("decorator", wav_path, text)
+
+    @filter.after_message_sent()
+    async def after_message_sent(self, event: AstrMessageEvent):
+        if not self._cfg("cleanup_after_send", True):
+            return
+        self._cleanup_tracked_event_files(event)
 
     async def terminate(self):
         logger.info("[mimo_tts_decorator] terminate")
