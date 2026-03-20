@@ -11,6 +11,9 @@
 - 新增 `auto_tag_density`，让自动打标更接近 MiMo 官方示例的标签密度
 - 保留并延续 0.5.x 的自动打标、style、语速和朗读清洗能力
 - 补充 `ruff` / `pyproject.toml` / `.gitignore`，更适合提交和发布
+<img width="893" height="863" alt="image" src="https://github.com/user-attachments/assets/acd87c8f-6e11-48ef-bcf9-5d0b5666c3eb" />
+<img width="887" height="857" alt="image" src="https://github.com/user-attachments/assets/8021c0c1-c28d-4b54-8d74-eb59ced74455" />
+<img width="898" height="863" alt="image" src="https://github.com/user-attachments/assets/e3a581ae-6499-41ce-b548-c5f838cb7077" />
 
 ---
 
