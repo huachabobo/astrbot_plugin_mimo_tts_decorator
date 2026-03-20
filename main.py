@@ -725,7 +725,9 @@ class MimoTTSDecorator(Star):
             yield event.plain_result(f"MiMo TTS 失败：{e}")
 
     @filter.on_decorating_result()
-    async def on_decorating_result(self, event: AstrMessageEvent):
+    async def on_decorating_result(
+        self, event: AstrMessageEvent, *_args, **_kwargs
+    ):
         if not self._cfg("enabled", True):
             return
         if not self._cfg("decorator_enabled", True):
@@ -771,7 +773,7 @@ class MimoTTSDecorator(Star):
         self._log_tts_send_success("decorator", wav_path, text)
 
     @filter.after_message_sent()
-    async def after_message_sent(self, event: AstrMessageEvent):
+    async def after_message_sent(self, event: AstrMessageEvent, *_args, **_kwargs):
         if not self._cfg("cleanup_after_send", True):
             return
         self._cleanup_tracked_event_files(event)
