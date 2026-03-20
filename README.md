@@ -1,5 +1,8 @@
 # MiMo TTS 装饰器 v0.6.3
 
+<img width="427" height="62" alt="image" src="https://github.com/user-attachments/assets/dbe01121-b3fc-487e-8d90-661f1e505eb3" />
+使用这个插件需要在普通配置里关闭TTS总开关
+
 这个版本重点做了 6 件事：
 
 - 默认把临时 wav 放到 AstrBot 的 `data/plugin_data/{plugin_name}/temp`
