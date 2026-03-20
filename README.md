@@ -297,3 +297,6 @@ MiMo 官方语音合成接口不是直接喂“纯文本”就完事，而是更
 - 大风格进 `<style>`
 - 正文标签更像官方示例里的动作/状态/节奏控制
 
+作者：huachabobo
+开发协助：OpenAI（ChatGPT 5.4 Thinking）
+
