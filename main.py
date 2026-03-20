@@ -10,13 +10,7 @@ import astrbot.api.message_components as Comp
 import httpx
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.star import Context, Star
-
-try:
-    from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-except Exception:  # 兼容旧版 AstrBot 或文档工具环境
-    get_astrbot_data_path = None
-
+from astrbot.api.star import Context, Star, StarTools
 
 PLUGIN_NAME = "astrbot_plugin_mimo_tts_decorator"
 LEGACY_TEMP_DIR = "/AstrBot/data/temp/mimo_tts"
@@ -31,7 +25,7 @@ class MimoTTSDecorator(Star):
         self.temp_dir = self._resolve_temp_dir()
         os.makedirs(self.temp_dir, exist_ok=True)
         self._cleanup_stale_temp_files()
-        logger.info("[mimo_tts_decorator] loaded v0.6.2")
+        logger.info("[mimo_tts_decorator] loaded v0.6.3")
 
     def _cfg(self, key: str, default=None):
         return self.config.get(key, default)
@@ -40,18 +34,15 @@ class MimoTTSDecorator(Star):
         return getattr(self, "name", "") or PLUGIN_NAME
 
     def _default_temp_dir(self) -> str:
-        if get_astrbot_data_path is not None:
-            try:
-                data_path = Path(get_astrbot_data_path())
-                return str(data_path / "plugin_data" / self._plugin_name() / "temp")
-            except Exception as e:
-                logger.warning(
-                    "[mimo_tts_decorator] resolve AstrBot data path failed, "
-                    f"fallback to cwd: {e}"
-                )
-        return os.path.join(
-            os.getcwd(), "data", "plugin_data", self._plugin_name(), "temp"
-        )
+        try:
+            data_path = Path(StarTools.get_data_dir())
+            return str(data_path / "temp")
+        except Exception as e:
+            logger.warning(
+                "[mimo_tts_decorator] resolve AstrBot data dir failed, "
+                f"fallback to cwd: {e}"
+            )
+        return str(Path.cwd() / "data" / "plugin_data" / self._plugin_name() / "temp")
 
     def _resolve_temp_dir(self) -> str:
         configured = (self.config.get("temp_dir", "") or "").strip()
