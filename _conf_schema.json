@@ -1,0 +1,266 @@
+{
+  "enabled": {
+    "description": "启用插件",
+    "type": "bool",
+    "default": true
+  },
+  "decorator_enabled": {
+    "description": "启用全局回复转语音（发送前装饰）",
+    "type": "bool",
+    "default": true
+  },
+  "api_key": {
+    "description": "MiMo API Key",
+    "type": "string",
+    "hint": "小米 MiMo 平台 API Key",
+    "password": true
+  },
+  "base_url": {
+    "description": "MiMo Chat Completions 地址",
+    "type": "string",
+    "default": "https://api.xiaomimimo.com/v1/chat/completions"
+  },
+  "model": {
+    "description": "TTS 模型",
+    "type": "string",
+    "default": "mimo-v2-tts"
+  },
+  "voice": {
+    "description": "音色",
+    "type": "string",
+    "default": "default_zh",
+    "options": [
+      "default_zh",
+      "mimo_default",
+      "default_en"
+    ],
+    "hint": "当前官方公开可用音色一般就是：default_zh / mimo_default / default_en。中文主场景建议优先用 default_zh。"
+  },
+  "format": {
+    "description": "输出格式",
+    "type": "string",
+    "default": "wav",
+    "options": [
+      "wav"
+    ]
+  },
+  "global_style": {
+    "description": "全局风格（会自动包装成 <style>...</style> 放到 assistant 文本开头，可填多个，逗号分隔）",
+    "type": "string",
+    "default": "",
+    "hint": "参考可直接填：开心 / 悲伤 / 生气；孙悟空 / 林黛玉；俏皮 / 夹子音 / 台湾腔；东北话 / 四川话 / 河南话 / 粤语。多个风格可用英文或中文逗号拼接，会合并进同一个 <style> 标签。"
+  },
+  "speed_style": {
+    "description": "语速控制（会自动并入同一个 <style> 标签）",
+    "type": "string",
+    "default": "",
+    "options": [
+      "",
+      "稍快",
+      "变快",
+      "稍慢",
+      "变慢"
+    ],
+    "hint": "官方文档风格写法示例：变快 / 变慢。比如全局风格=俏皮,夹子音，语速=稍快，最终会拼成 <style>俏皮,夹子音,稍快</style>。"
+  },
+  "audio_tag_prefix": {
+    "description": "音频标签前缀（原样插入 assistant 文本最前面）",
+    "type": "string",
+    "default": "",
+    "hint": "更推荐临时手工实验时使用。参考更像官方细粒度示例的标签： （停顿） （小声） （沉默片刻） （长叹一口气） （语速加快） （苦笑） （咳嗽） （提高音量喊话） （紧张，深呼吸）。整体风格优先放进 <style>。"
+  },
+  "audio_tag_suffix": {
+    "description": "音频标签后缀（原样插入 assistant 文本结尾）",
+    "type": "string",
+    "default": "",
+    "hint": "一般留空即可。需要手工试验结尾情绪时再用。"
+  },
+  "assistant_text_template": {
+    "description": "assistant 文本模板",
+    "type": "string",
+    "default": "{style_tag}{audio_tag_prefix}{text}{audio_tag_suffix}",
+    "hint": "可用变量：{style_tag} {style_value} {audio_tag_prefix} {text} {audio_tag_suffix}"
+  },
+  "auto_tag_enabled": {
+    "description": "启用自动加音频标签润色模式",
+    "type": "bool",
+    "default": false
+  },
+  "auto_tag_mode": {
+    "description": "自动加标签模式",
+    "type": "string",
+    "default": "rule_based",
+    "options": [
+      "off",
+      "rule_based",
+      "llm"
+    ],
+    "hint": "rule_based = 本地规则，速度快；llm = 更细腻，但依赖额外模型。"
+  },
+  "auto_tag_profile": {
+    "description": "规则模式风格预设",
+    "type": "string",
+    "default": "catgirl_soft",
+    "options": [
+      "catgirl_soft",
+      "catgirl_energetic",
+      "gentle",
+      "neutral"
+    ],
+    "hint": "catgirl_soft = 软萌陪伴；catgirl_energetic = 元气活泼；gentle = 温柔安抚；neutral = 最克制。规则模式会尽量用更像官方示例的动作/状态/节奏标签。"
+  },
+  "auto_tag_max_chars": {
+    "description": "自动加标签的最大字符数（太长就跳过）",
+    "type": "int",
+    "default": 280
+  },
+  "auto_tag_skip_if_already_tagged": {
+    "description": "检测到文本开头已带标签或 <style> 时，跳过自动加标签",
+    "type": "bool",
+    "default": true
+  },
+  "auto_tag_llm_fallback_to_rule": {
+    "description": "LLM 模式失败时回退到规则模式",
+    "type": "bool",
+    "default": true
+  },
+  "auto_tag_pause_between_sentences": {
+    "description": "规则模式：句间停顿标签",
+    "type": "string",
+    "default": "（停顿）"
+  },
+  "auto_tag_think_tag": {
+    "description": "规则模式：迟疑/思考标签",
+    "type": "string",
+    "default": "（沉默片刻）"
+  },
+  "auto_tag_quiet_tag": {
+    "description": "规则模式：小声标签",
+    "type": "string",
+    "default": "（小声）"
+  },
+  "auto_tag_speedup_tag": {
+    "description": "规则模式：语速加快标签",
+    "type": "string",
+    "default": "（语速加快）"
+  },
+  "auto_tag_sigh_tag": {
+    "description": "规则模式：叹气标签",
+    "type": "string",
+    "default": "（长叹一口气）"
+  },
+  "auto_tag_wry_smile_tag": {
+    "description": "规则模式：苦笑标签",
+    "type": "string",
+    "default": "（苦笑）"
+  },
+  "auto_tag_cough_tag": {
+    "description": "规则模式：咳嗽标签",
+    "type": "string",
+    "default": "（咳嗽）"
+  },
+  "auto_tag_loud_tag": {
+    "description": "规则模式：提高音量喊话标签",
+    "type": "string",
+    "default": "（提高音量喊话）"
+  },
+  "auto_tag_deep_breath_tag": {
+    "description": "规则模式：紧张/深呼吸标签",
+    "type": "string",
+    "default": "（紧张，深呼吸）"
+  },
+  "tagger_api_key": {
+    "description": "自动标签 LLM 的 API Key（仅 llm 模式使用）",
+    "type": "string",
+    "password": true
+  },
+  "tagger_base_url": {
+    "description": "自动标签 LLM 的 OpenAI 兼容 chat/completions 地址",
+    "type": "string",
+    "default": ""
+  },
+  "tagger_model": {
+    "description": "自动标签 LLM 模型名",
+    "type": "string",
+    "default": ""
+  },
+  "tagger_temperature": {
+    "description": "自动标签 LLM temperature",
+    "type": "float",
+    "default": 0.3
+  },
+  "tagger_timeout_seconds": {
+    "description": "自动标签 LLM 超时（秒）",
+    "type": "int",
+    "default": 45
+  },
+  "tagger_strict_guidance_enabled": {
+    "description": "启用更严格的 LLM 打标约束（推荐）",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，会额外要求 LLM：不要自由扩写、不要写测试说明、标签尽量模仿官方动作/状态/节奏示例、不要输出（轻快）（轻盈灵动）这类容易被直接念出来的抽象标签。"
+  },
+  "tagger_system_prompt": {
+    "description": "自动标签 LLM 的系统提示词（留空使用内置）",
+    "type": "string",
+    "default": "",
+    "hint": "可以自定义；若同时开启“更严格的 LLM 打标约束”，插件会在你的提示词后面再附加一段更强的硬约束。默认内置提示仍会做轻度口语化改造，避免文本直接念出来很奇怪。"
+  },
+  "temp_dir": {
+    "description": "临时音频目录",
+    "type": "string",
+    "default": "/AstrBot/data/temp/mimo_tts"
+  },
+  "timeout_seconds": {
+    "description": "MiMo HTTP 超时（秒）",
+    "type": "int",
+    "default": 60
+  },
+  "max_chars": {
+    "description": "单次转语音最大字符数，超过则跳过并保留原文本",
+    "type": "int",
+    "default": 500
+  },
+  "trigger_mode": {
+    "description": "发送模式",
+    "type": "string",
+    "default": "replace_plain",
+    "options": [
+      "replace_plain",
+      "append_record"
+    ]
+  },
+  "only_plain_chain": {
+    "description": "仅对纯文本消息链生效（推荐开启）",
+    "type": "bool",
+    "default": true
+  },
+  "preserve_text_when_append": {
+    "description": "append_record 模式下是否保留原文本",
+    "type": "bool",
+    "default": true
+  },
+  "dummy_user_prompt": {
+    "description": "发送给 MiMo 的 user 旁带提示",
+    "type": "string",
+    "default": "请把 assistant 提供的文本转成自然、清晰、稳定的普通话语音，不要改写 assistant 文本。",
+    "hint": "它不会被念出来，而是作为 user 角色的旁带说明，告诉 MiMo 如何处理 assistant 角色里的目标文本。按官方文档，真正要被合成的文本应放在 assistant role。"
+  },
+  "speech_cleanup_enabled": {
+    "description": "朗读友好清洗：自动剔除/改写不易朗读内容（@提及、长数字号码、过长ID、下划线账号等）",
+    "type": "bool",
+    "default": true,
+    "hint": "这是独立开关。关闭后，@ 与长号码等会原样保留。"
+  },
+  "log_llm_tagged_text_warning": {
+    "description": "LLM 打标完成后，把最终打标文本以 warning 级别写入日志",
+    "type": "bool",
+    "default": false
+  },
+  "log_tts_send_success_warning": {
+    "description": "TTS 成功生成并写入消息链后，以 warning 级别写入日志",
+    "type": "bool",
+    "default": false,
+    "hint": "这里记录的是插件侧“语音已生成并写入结果链/测试命令已产出 Record”，不是 QQ 侧最终一定发送成功的回执。"
+  }
+}
