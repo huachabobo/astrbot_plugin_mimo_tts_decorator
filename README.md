@@ -1,10 +1,11 @@
-# MiMo TTS 装饰器 v0.6.0
+# MiMo TTS 装饰器 v0.6.1
 
-这个版本重点做了 5 件事：
+这个版本重点做了 6 件事：
 
 - 默认把临时 wav 放到 AstrBot 的 `data/plugin_data/{plugin_name}/temp`
 - 新增临时 wav 自动回收，避免机器人长期运行后持续占磁盘
 - `replace_plain` 模式下保留原消息链里的 `At` / `Reply`
+- 新增 `auto_tag_density`，让自动打标更接近 MiMo 官方示例的标签密度
 - 保留并延续 0.5.x 的自动打标、style、语速和朗读清洗能力
 - 补充 `ruff` / `pyproject.toml` / `.gitignore`，更适合提交和发布
 
@@ -222,6 +223,14 @@ MiMo 官方语音合成接口不是直接喂“纯文本”就完事，而是更
 建议保持开启。
 
 同时，`tagger_system_prompt` 仍然可以自定义；如果你自己填了提示词，插件会在后面再附加这一段更严格的约束。
+
+### 自动标签密度 `auto_tag_density`
+
+- `conservative`：标签更少，整体更克制
+- `balanced`：更接近 MiMo 官方示例里那种按句分布的标签密度
+- `aggressive`：更积极插入标签，表现力更强
+
+如果你觉得现在“味道不够”，优先把它调到 `balanced` 或 `aggressive`，再观察日志里的 `llm tagged text`。
 
 ---
 

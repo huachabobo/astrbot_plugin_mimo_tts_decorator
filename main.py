@@ -30,7 +30,7 @@ class MimoTTSDecorator(Star):
         self.temp_dir = self._resolve_temp_dir()
         os.makedirs(self.temp_dir, exist_ok=True)
         self._cleanup_stale_temp_files()
-        logger.info("[mimo_tts_decorator] loaded v0.6.0")
+        logger.info("[mimo_tts_decorator] loaded v0.6.1")
 
     def _cfg(self, key: str, default=None):
         return self.config.get(key, default)
@@ -261,6 +261,39 @@ class MimoTTSDecorator(Star):
     def _contains_any(self, text: str, words: List[str]) -> bool:
         return any(w in text for w in words)
 
+    def _auto_tag_density(self) -> str:
+        density = (self._cfg("auto_tag_density", "balanced") or "balanced").strip()
+        if density not in {"conservative", "balanced", "aggressive"}:
+            return "balanced"
+        return density
+
+    def _max_tags_per_sentence(self) -> int:
+        density = self._auto_tag_density()
+        if density == "conservative":
+            return 2
+        if density == "aggressive":
+            return 4
+        return 3
+
+    def _llm_density_guidance(self) -> str:
+        density = self._auto_tag_density()
+        if density == "conservative":
+            return (
+                "按句意谨慎插入标签，整段通常 1 到 3 处即可。"
+                "优先在句间停顿、迟疑、强调位置添加，避免标签太多。"
+            )
+        if density == "aggressive":
+            return (
+                "按句意更积极地插入标签，整段通常 4 到 8 处，长段落可更多。"
+                "优先在句间停顿、情绪转折、强调、呼吸感位置分散添加，"
+                "但不要连续堆叠 3 个以上标签。"
+            )
+        return (
+            "按句意自然插入标签，整段通常 2 到 6 处。"
+            "优先在句间停顿、情绪转折、强调位置分散添加，"
+            "避免一整段只有 0 到 1 个标签。"
+        )
+
     def _infer_rule_tags(self, sentence: str, idx: int) -> List[str]:
         s = (sentence or "").strip()
         if not s:
@@ -337,8 +370,8 @@ class MimoTTSDecorator(Star):
             tags.append(speedup_tag)
 
         tags = self._dedupe_tags(tags)
-        # 单句最多 2 个标签，避免堆叠
-        return tags[:2]
+        # 单句标签数量受密度配置控制，避免堆叠过多。
+        return tags[: self._max_tags_per_sentence()]
 
     def _cleanup_generated_tag_text(self, text: str) -> str:
         """对自动打标生成的文本做后处理：
@@ -421,8 +454,9 @@ class MimoTTSDecorator(Star):
             "（停顿）（小声）（沉默片刻）（长叹一口气）（语速加快）（苦笑）（咳嗽）（提高音量喊话）（紧张，深呼吸）。"
             "\n4. 不要输出抽象风格标签作为正文内容，例如："
             "（轻快）（轻盈灵动）（带一点撒娇）（元气一点）（句尾上扬）等。"
-            "\n5. 每段最多插入 0 到 2 处标签，优先放在句间或局部位置，"
-            "不要在开头堆叠很多标签。"
+            "\n5. "
+            + self._llm_density_guidance()
+            + " 优先放在句间或局部位置，不要在开头堆叠很多标签。"
             "\n6. 删除或改写不适合朗读的内容："
             "@提及、QQ号/UID 等长数字、过长 ID、下划线账号。"
         )
@@ -431,8 +465,9 @@ class MimoTTSDecorator(Star):
         return (
             "你是一个中文 TTS 朗读润色器。"
             "你的任务是：把用户原文改写成更适合 MiMo TTS 朗读的中文口语短句，"
-            "必要时加入少量更像官方示例的细粒度音频标签。"
-            "要求：保持原意，适度口语化、断句、压缩长句，让文本更适合语音聊天。"
+            "按句意和节奏自然加入适量、分散的细粒度音频标签。"
+            "要求：保持原意，适度口语化、断句、压缩长句，让文本更适合语音聊天，"
+            "并尽量接近 MiMo 官方示例那种按句分布的标签风格。"
         )
 
     def _compose_tagger_system_prompt(self) -> str:

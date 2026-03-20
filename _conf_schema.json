@@ -109,6 +109,17 @@
     ],
     "hint": "catgirl_soft = 软萌陪伴；catgirl_energetic = 元气活泼；gentle = 温柔安抚；neutral = 最克制。规则模式会尽量用更像官方示例的动作/状态/节奏标签。"
   },
+  "auto_tag_density": {
+    "description": "自动标签密度",
+    "type": "string",
+    "default": "balanced",
+    "options": [
+      "conservative",
+      "balanced",
+      "aggressive"
+    ],
+    "hint": "conservative = 标签更少、更克制；balanced = 更接近官方示例的分布式打标；aggressive = 更积极插入标签，适合想要更强表现力的场景。"
+  },
   "auto_tag_max_chars": {
     "description": "自动加标签的最大字符数（太长就跳过）",
     "type": "int",
