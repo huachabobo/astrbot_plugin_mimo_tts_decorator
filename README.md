@@ -1,4 +1,4 @@
-# MiMo TTS 装饰器 v0.6.1
+# MiMo TTS 装饰器 v0.6.2
 
 这个版本重点做了 6 件事：
 
@@ -198,11 +198,20 @@ MiMo 官方语音合成接口不是直接喂“纯文本”就完事，而是更
 - 更细腻
 - 更适合按句意做断句和口语化
 - 情绪通常更贴近“想要的感觉”
+- 更容易做出接近 MiMo 官方示例那种按句分布的标签密度
 
 缺点：
 
 - 依赖额外模型
 - 可能偶尔跑偏
+
+默认推荐：
+
+- `tagger_model = gemini-3-flash-preview`
+- `tagger_temperature = 0.3`
+- `tagger_timeout_seconds = 45`
+
+如果 `tagger_api_key`、真实 `tagger_base_url`、`tagger_model` 没配完整，插件会自动回退到规则模式，不会直接把消息搞坏。
 
 ### “更严格的 LLM 打标约束”
 
@@ -254,18 +263,21 @@ MiMo 官方语音合成接口不是直接喂“纯文本”就完事，而是更
 ### 方案 A：可爱活泼猫娘
 
 - `voice = default_zh`
-- `global_style = 俏皮,夹子音`
+- `global_style = 俏皮,夹子音,开心`
 - `speed_style = 稍快`
 - `auto_tag_enabled = 开`
 - `auto_tag_mode = llm`
+- `auto_tag_density = aggressive`
 - `tagger_strict_guidance_enabled = 开`
+- `tagger_model = gemini-3-flash-preview`
 - `auto_tag_profile = catgirl_soft`
 
 ### 方案 B：更元气
 
 - `voice = default_zh`
-- `global_style = 俏皮,夹子音`
+- `global_style = 俏皮,夹子音,开心`
 - `speed_style = 变快`
+- `auto_tag_density = aggressive`
 - `auto_tag_profile = catgirl_energetic`
 
 ### 方案 C：更温柔
@@ -273,6 +285,7 @@ MiMo 官方语音合成接口不是直接喂“纯文本”就完事，而是更
 - `voice = default_zh`
 - `global_style = 温柔`
 - `speed_style = 稍慢`
+- `auto_tag_density = balanced`
 - `auto_tag_profile = gentle`
 
 ---

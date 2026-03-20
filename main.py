@@ -21,6 +21,7 @@ except Exception:  # 兼容旧版 AstrBot 或文档工具环境
 PLUGIN_NAME = "astrbot_plugin_mimo_tts_decorator"
 LEGACY_TEMP_DIR = "/AstrBot/data/temp/mimo_tts"
 EVENT_TEMP_FILES_ATTR = "_mimo_tts_temp_files"
+TAGGER_BASE_URL_PLACEHOLDER = "http://xxx.xxx.xxx/v1/chat/completions"
 
 
 class MimoTTSDecorator(Star):
@@ -30,7 +31,7 @@ class MimoTTSDecorator(Star):
         self.temp_dir = self._resolve_temp_dir()
         os.makedirs(self.temp_dir, exist_ok=True)
         self._cleanup_stale_temp_files()
-        logger.info("[mimo_tts_decorator] loaded v0.6.1")
+        logger.info("[mimo_tts_decorator] loaded v0.6.2")
 
     def _cfg(self, key: str, default=None):
         return self.config.get(key, default)
@@ -294,6 +295,14 @@ class MimoTTSDecorator(Star):
             "避免一整段只有 0 到 1 个标签。"
         )
 
+    def _is_tagger_configured(self) -> bool:
+        api_key = (self._cfg("tagger_api_key", "") or "").strip()
+        base_url = (self._cfg("tagger_base_url", "") or "").strip()
+        model = (self._cfg("tagger_model", "") or "").strip()
+        if base_url == TAGGER_BASE_URL_PLACEHOLDER:
+            return False
+        return bool(api_key and base_url and model)
+
     def _infer_rule_tags(self, sentence: str, idx: int) -> List[str]:
         s = (sentence or "").strip()
         if not s:
@@ -479,15 +488,15 @@ class MimoTTSDecorator(Star):
         return base_prompt.strip()
 
     async def _auto_tag_llm(self, text: str) -> str:
-        api_key = (self._cfg("tagger_api_key", "") or "").strip()
-        base_url = (self._cfg("tagger_base_url", "") or "").strip()
-        model = (self._cfg("tagger_model", "") or "").strip()
-        if not api_key or not base_url or not model:
+        if not self._is_tagger_configured():
             raise RuntimeError(
                 "自动标签 LLM 模式已开启，但 "
                 "tagger_api_key / tagger_base_url / "
                 "tagger_model 未配置完整"
             )
+        api_key = (self._cfg("tagger_api_key", "") or "").strip()
+        base_url = (self._cfg("tagger_base_url", "") or "").strip()
+        model = (self._cfg("tagger_model", "") or "").strip()
 
         payload = {
             "model": model,
@@ -537,6 +546,8 @@ class MimoTTSDecorator(Star):
         if mode == "rule_based":
             return self._auto_tag_rule_based(text)
         if mode == "llm":
+            if not self._is_tagger_configured():
+                return self._auto_tag_rule_based(text)
             try:
                 return await self._auto_tag_llm(text)
             except Exception as e:

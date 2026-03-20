@@ -47,13 +47,13 @@
   "global_style": {
     "description": "全局风格（会自动包装成 <style>...</style> 放到 assistant 文本开头，可填多个，逗号分隔）",
     "type": "string",
-    "default": "",
+    "default": "俏皮,夹子音,开心",
     "hint": "参考可直接填：开心 / 悲伤 / 生气；孙悟空 / 林黛玉；俏皮 / 夹子音 / 台湾腔；东北话 / 四川话 / 河南话 / 粤语。多个风格可用英文或中文逗号拼接，会合并进同一个 <style> 标签。"
   },
   "speed_style": {
     "description": "语速控制（会自动并入同一个 <style> 标签）",
     "type": "string",
-    "default": "",
+    "default": "稍快",
     "options": [
       "",
       "稍快",
@@ -84,12 +84,12 @@
   "auto_tag_enabled": {
     "description": "启用自动加音频标签润色模式",
     "type": "bool",
-    "default": false
+    "default": true
   },
   "auto_tag_mode": {
     "description": "自动加标签模式",
     "type": "string",
-    "default": "rule_based",
+    "default": "llm",
     "options": [
       "off",
       "rule_based",
@@ -112,7 +112,7 @@
   "auto_tag_density": {
     "description": "自动标签密度",
     "type": "string",
-    "default": "balanced",
+    "default": "aggressive",
     "options": [
       "conservative",
       "balanced",
@@ -188,12 +188,12 @@
   "tagger_base_url": {
     "description": "自动标签 LLM 的 OpenAI 兼容 chat/completions 地址",
     "type": "string",
-    "default": ""
+    "default": "http://xxx.xxx.xxx/v1/chat/completions"
   },
   "tagger_model": {
     "description": "自动标签 LLM 模型名",
     "type": "string",
-    "default": ""
+    "default": "gemini-3-flash-preview"
   },
   "tagger_temperature": {
     "description": "自动标签 LLM temperature",
