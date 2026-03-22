@@ -1,10 +1,14 @@
+import asyncio
 import base64
+import binascii
 import os
 import re
+import shutil
+import subprocess
 import time
 import uuid
 from pathlib import Path
-from typing import List
+from typing import Any, List, Optional
 
 import astrbot.api.message_components as Comp
 import httpx
@@ -16,22 +20,43 @@ PLUGIN_NAME = "astrbot_plugin_mimo_tts_decorator"
 LEGACY_TEMP_DIR = "/AstrBot/data/temp/mimo_tts"
 EVENT_TEMP_FILES_ATTR = "_mimo_tts_temp_files"
 TAGGER_BASE_URL_PLACEHOLDER = "http://xxx.xxx.xxx/v1/chat/completions"
+MIMO_DEFAULT_CHAT_COMPLETIONS_URL = "https://api.xiaomimimo.com/v1/chat/completions"
+RE_TABLIKE_WHITESPACE = re.compile(r"[\t\f\v]+")
+RE_MULTI_SPACES = re.compile(r"[ ]{2,}")
+RE_MULTI_NEWLINES = re.compile(r"\n{3,}")
+RE_AT_MENTION = re.compile(
+    r"@[^\s@，。！？!,,:：;；、]{1,24}(?=$|[\s，。！？!,,:：;；、])"
+)
+RE_LONG_NUMBER = re.compile(r"\b\d{6,}\b")
+RE_LONG_MIXED_TOKEN = re.compile(r"\b[A-Za-z0-9]{10,}\b")
+RE_SENTENCE_SPLIT = re.compile(r"([。！？!?；;…]+|\n+)")
+RE_QUESTION_END = re.compile(r"[?？]+\s*$")
+RE_EXCLAIM_END = re.compile(r"[!！]+\s*$")
+RE_ASCII_TAG = re.compile(r"\(([^()\n]{1,18})\)")
+RE_EMPTY_CN_TAG = re.compile(r"（\s*）")
+RE_ADJACENT_TAG_SPACE = re.compile(r"(）)\s+(（)")
+RE_LEADING_TAGS = re.compile(r"^((?:（[^（）\n]{1,24}）)+)(.*)$")
+RE_LEADING_TAG = re.compile(r"（[^（）\n]{1,24}）")
 
 
 class MimoTTSDecorator(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+        self._http_client: Optional[httpx.AsyncClient] = None
         self.temp_dir = self._resolve_temp_dir()
         os.makedirs(self.temp_dir, exist_ok=True)
         self._cleanup_stale_temp_files()
-        logger.info("[mimo_tts_decorator] loaded v0.6.3")
+        logger.info("[mimo_tts_decorator] loaded v1.0.0")
 
-    def _cfg(self, key: str, default=None):
+    def _cfg(self, key: str, default: Any = None) -> Any:
         return self.config.get(key, default)
 
     def _plugin_name(self) -> str:
         return getattr(self, "name", "") or PLUGIN_NAME
+
+    def _get_tts_provider_id(self) -> str:
+        return (self._cfg("tts_provider_id", "") or "").strip()
 
     def _default_temp_dir(self) -> str:
         try:
@@ -43,6 +68,156 @@ class MimoTTSDecorator(Star):
                 f"fallback to cwd: {e}"
             )
         return str(Path.cwd() / "data" / "plugin_data" / self._plugin_name() / "temp")
+
+    def _match_provider_id(self, provider: Any, provider_id: str) -> bool:
+        provider_id = (provider_id or "").strip()
+        if not provider_id or provider is None:
+            return False
+
+        candidate_values = [
+            getattr(provider, "id", None),
+            getattr(provider, "provider_id", None),
+        ]
+        provider_config = getattr(provider, "provider_config", None)
+        if isinstance(provider_config, dict):
+            candidate_values.extend(
+                [
+                    provider_config.get("id"),
+                    provider_config.get("provider_id"),
+                    provider_config.get("name"),
+                ]
+            )
+
+        return any((value or "").strip() == provider_id for value in candidate_values)
+
+    def _get_selected_tts_provider(self) -> Any:
+        provider_id = self._get_tts_provider_id()
+        if not provider_id:
+            return None
+
+        try:
+            providers = self.context.get_all_tts_providers()
+        except Exception as e:
+            raise RuntimeError(f"获取 AstrBot TTS 提供商列表失败：{e}") from e
+
+        for provider in providers or []:
+            if self._match_provider_id(provider, provider_id):
+                return provider
+
+        raise RuntimeError(f"TTS 提供商不存在或不可用：{provider_id}")
+
+    def _get_provider_config(self, provider: Any) -> dict:
+        provider_config = getattr(provider, "provider_config", None)
+        if isinstance(provider_config, dict):
+            return provider_config
+        return {}
+
+    def _is_selected_provider_mimo_tts(self, provider: Any) -> bool:
+        provider_config = self._get_provider_config(provider)
+        provider_type = (provider_config.get("type", "") or "").strip()
+        if provider_type == "mimo_tts_api":
+            return True
+
+        provider_id = self._get_tts_provider_id()
+        if provider_id.startswith("mimo"):
+            return True
+
+        provider_name = (provider_config.get("name", "") or "").lower()
+        return "mimo" in provider_name
+
+    def _normalize_mimo_base_url(self, base_url: str) -> str:
+        normalized = (base_url or "").strip().rstrip("/")
+        if not normalized:
+            return normalized
+        if normalized.endswith("/chat/completions"):
+            return normalized
+        return normalized + "/chat/completions"
+
+    def _resolve_mimo_base_url_from_provider_config(self, provider_config: dict) -> str:
+        candidates = [
+            provider_config.get("base_url"),
+            provider_config.get("api_base"),
+            provider_config.get("api_url"),
+            provider_config.get("endpoint"),
+            provider_config.get("url"),
+        ]
+        for candidate in candidates:
+            normalized = self._normalize_mimo_base_url(candidate or "")
+            if not normalized:
+                continue
+            lowered = normalized.lower()
+            if "platform.xiaomimimo.com" in lowered:
+                logger.warning(
+                    "[mimo_tts_decorator] ignore MiMo provider web console url: "
+                    f"{normalized}"
+                )
+                continue
+            return normalized
+        logger.info(
+            "[mimo_tts_decorator] "
+            "use default MiMo API endpoint from provider fallback: "
+            f"{MIMO_DEFAULT_CHAT_COMPLETIONS_URL}"
+        )
+        return MIMO_DEFAULT_CHAT_COMPLETIONS_URL
+
+    def _resolve_mimo_request_settings_from_provider(self, provider: Any) -> dict:
+        provider_config = self._get_provider_config(provider)
+        api_key = (provider_config.get("api_key", "") or "").strip()
+        base_url = self._resolve_mimo_base_url_from_provider_config(provider_config)
+        model = (provider_config.get("model", "") or "").strip()
+        voice = (provider_config.get("mimo-tts-voice", "") or "").strip()
+        audio_format = (provider_config.get("mimo-tts-format", "") or "").strip()
+
+        if not api_key:
+            raise RuntimeError("官方 MiMo TTS 提供商里没有可复用的 API Key")
+        if not base_url:
+            raise RuntimeError("官方 MiMo TTS 提供商里没有可复用的 API 地址")
+
+        return {
+            "api_key": api_key,
+            "base_url": base_url,
+            "model": model or self._cfg("model", "mimo-v2-tts"),
+            "voice": voice or self._cfg("voice", "default_zh"),
+            "format": audio_format or self._cfg("format", "wav"),
+        }
+
+    def _get_http_client(self) -> httpx.AsyncClient:
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(follow_redirects=True)
+        return self._http_client
+
+    async def _post_json(
+        self,
+        api_name: str,
+        url: str,
+        headers: dict,
+        payload: dict,
+        timeout_seconds: int,
+    ) -> dict:
+        client = self._get_http_client()
+        try:
+            resp = await client.post(
+                url, headers=headers, json=payload, timeout=timeout_seconds
+            )
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"{api_name} 请求失败：{e}") from e
+
+        content_type = resp.headers.get("content-type", "")
+        body_preview = resp.text[:300]
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"{api_name} HTTP {resp.status_code}, "
+                f"content-type={content_type}, body={body_preview}"
+            )
+        if "html" in content_type.lower():
+            raise RuntimeError(f"{api_name} 返回了 HTML 而不是 JSON：{body_preview}")
+        try:
+            return resp.json()
+        except ValueError as e:
+            raise RuntimeError(
+                f"{api_name} 返回的不是合法 JSON, "
+                f"content-type={content_type}, body={body_preview}"
+            ) from e
 
     def _resolve_temp_dir(self) -> str:
         configured = (self.config.get("temp_dir", "") or "").strip()
@@ -122,6 +297,147 @@ class MimoTTSDecorator(Star):
                 )
         setattr(event, EVENT_TEMP_FILES_ATTR, [])
 
+    def _is_local_file_path(self, path: str) -> bool:
+        if not path or "://" in path:
+            return False
+        return os.path.isfile(path)
+
+    def _copy_audio_into_temp_dir(self, source_path: str) -> str:
+        if not self._is_local_file_path(source_path):
+            return source_path
+
+        source = Path(source_path)
+        try:
+            if source.resolve().parent == Path(self.temp_dir).resolve():
+                return str(source)
+        except Exception:
+            pass
+
+        suffix = source.suffix or ".wav"
+        target = Path(self.temp_dir) / f"mimo_tts_{uuid.uuid4().hex}{suffix}"
+        shutil.copyfile(source, target)
+        return str(target)
+
+    def _looks_like_wav_file(self, path: str) -> bool:
+        if not self._is_local_file_path(path):
+            return False
+        try:
+            with open(path, "rb") as f:
+                head = f.read(12)
+            return len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"WAVE"
+        except Exception:
+            return False
+
+    def _normalize_audio_for_qq(self, source_path: str) -> str:
+        if not self._is_local_file_path(source_path):
+            return source_path
+
+        ffmpeg_bin = shutil.which("ffmpeg")
+        if not ffmpeg_bin:
+            return source_path
+
+        target = Path(self.temp_dir) / f"mimo_tts_{uuid.uuid4().hex}_qq.wav"
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-i",
+            source_path,
+            "-vn",
+            "-acodec",
+            "pcm_s16le",
+            "-ac",
+            "1",
+            "-ar",
+            "24000",
+            str(target),
+        ]
+        try:
+            completed = subprocess.run(
+                cmd,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except Exception as e:
+            logger.warning(
+                "[mimo_tts_decorator] ffmpeg normalize failed to start: "
+                f"{source_path}, err={e}"
+            )
+            return source_path
+
+        if completed.returncode != 0 or not target.is_file():
+            logger.warning(
+                "[mimo_tts_decorator] ffmpeg normalize failed: "
+                f"source={source_path}, code={completed.returncode}, "
+                f"stderr={completed.stderr[-300:]}"
+            )
+            return source_path
+        return str(target)
+
+    async def _call_mimo_http(
+        self,
+        assistant_text: str,
+        *,
+        api_key: str,
+        base_url: str,
+        model: str,
+        voice: str,
+        audio_format: str,
+    ) -> str:
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": self._cfg(
+                        "dummy_user_prompt",
+                        "请把 assistant 提供的文本转成自然、清晰、"
+                        "稳定的普通话语音，"
+                        "不要改写 assistant 文本。",
+                    ),
+                },
+                {
+                    "role": "assistant",
+                    "content": assistant_text,
+                },
+            ],
+            "audio": {
+                "format": audio_format,
+                "voice": voice,
+            },
+            "temperature": 0,
+        }
+
+        timeout = int(self._cfg("timeout_seconds", 60))
+        headers = {
+            "api-key": api_key,
+            "Content-Type": "application/json",
+        }
+        data = await self._post_json("MiMo", base_url, headers, payload, timeout)
+
+        try:
+            audio_b64 = data["choices"][0]["message"]["audio"]["data"]
+        except Exception as e:
+            raise RuntimeError(f"MiMo 响应里没有 audio.data：{data}") from e
+
+        try:
+            raw = base64.b64decode(audio_b64, validate=True)
+        except (binascii.Error, TypeError, ValueError) as e:
+            raise RuntimeError("MiMo 返回的 audio.data 不是合法 Base64") from e
+        if len(raw) < 64:
+            raise RuntimeError("MiMo 返回的音频过小，疑似无效响应")
+
+        if not (raw[:4] == b"RIFF" and raw[8:12] == b"WAVE"):
+            raise RuntimeError("MiMo 返回内容不是标准 WAV（缺少 RIFF/WAVE 头）")
+
+        path = str(
+            Path(self.temp_dir) / f"mimo_tts_{uuid.uuid4().hex}.{audio_format or 'wav'}"
+        )
+        with open(path, "wb") as f:
+            f.write(raw)
+        return path
+
     def _log_llm_tagged_text(self, tagged_text: str):
         if not self._cfg("log_llm_tagged_text_warning", False):
             return
@@ -166,9 +482,9 @@ class MimoTTSDecorator(Star):
 
     def _normalize_text(self, text: str) -> str:
         text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
-        text = re.sub(r"[\t\f\v]+", " ", text)
-        text = re.sub(r"[ ]{2,}", " ", text)
-        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = RE_TABLIKE_WHITESPACE.sub(" ", text)
+        text = RE_MULTI_SPACES.sub(" ", text)
+        text = RE_MULTI_NEWLINES.sub("\n\n", text)
         return text.strip()
 
     def _sanitize_for_speech(self, text: str) -> str:
@@ -181,11 +497,9 @@ class MimoTTSDecorator(Star):
             return s
 
         s = s.replace("@全体成员", "大家").replace("@全体", "大家")
-        s = re.sub(
-            r"@[^\s@，。！？!,,:：;；、]{1,24}(?=$|[\s，。！？!,,:：;；、])", "", s
-        )
+        s = RE_AT_MENTION.sub("", s)
         s = s.replace("_", "")
-        s = re.sub(r"\b\d{6,}\b", "某个号码", s)
+        s = RE_LONG_NUMBER.sub("某个号码", s)
 
         def _mask_token(m):
             tok = m.group(0)
@@ -197,8 +511,8 @@ class MimoTTSDecorator(Star):
                 return "某位玩家"
             return tok
 
-        s = re.sub(r"\b[A-Za-z0-9]{10,}\b", _mask_token, s)
-        s = re.sub(r"\s{2,}", " ", s).strip()
+        s = RE_LONG_MIXED_TOKEN.sub(_mask_token, s)
+        s = RE_MULTI_SPACES.sub(" ", s).strip()
         return s
 
     def _looks_tagged(self, text: str) -> bool:
@@ -216,13 +530,13 @@ class MimoTTSDecorator(Star):
         if not text:
             return []
 
-        parts = re.split(r"([。！？!?；;…]+|\n+)", text)
+        parts = RE_SENTENCE_SPLIT.split(text)
         out = []
         buf = ""
         for part in parts:
             if not part:
                 continue
-            if re.fullmatch(r"([。！？!?；;…]+|\n+)", part):
+            if RE_SENTENCE_SPLIT.fullmatch(part):
                 buf += part
                 if buf.strip():
                     out.append(buf.strip())
@@ -286,7 +600,12 @@ class MimoTTSDecorator(Star):
             "避免一整段只有 0 到 1 个标签。"
         )
 
+    def _get_tagger_provider_id(self) -> str:
+        return (self._cfg("tagger_provider_id", "") or "").strip()
+
     def _is_tagger_configured(self) -> bool:
+        if self._get_tagger_provider_id():
+            return True
         api_key = (self._cfg("tagger_api_key", "") or "").strip()
         base_url = (self._cfg("tagger_base_url", "") or "").strip()
         model = (self._cfg("tagger_model", "") or "").strip()
@@ -327,8 +646,8 @@ class MimoTTSDecorator(Star):
         ):
             tags.append(think_tag)
 
-        is_question = bool(re.search(r"[?？]+\s*$", s))
-        is_exclaim = bool(re.search(r"[!！]+\s*$", s))
+        is_question = bool(RE_QUESTION_END.search(s))
+        is_exclaim = bool(RE_EXCLAIM_END.search(s))
         has_urgent_words = self._contains_any(
             s, ["快", "赶紧", "马上", "快点", "来不及", "冲", "立刻"]
         )
@@ -385,7 +704,7 @@ class MimoTTSDecorator(Star):
             return s
 
         # 规范短标签括号
-        s = re.sub(r"\(([^()\n]{1,18})\)", lambda m: f"（{m.group(1).strip()}）", s)
+        s = RE_ASCII_TAG.sub(lambda m: f"（{m.group(1).strip()}）", s)
 
         replacements = {
             "（轻声）": "（小声）",
@@ -411,14 +730,14 @@ class MimoTTSDecorator(Star):
         for label in risky_labels:
             s = re.sub(rf"（\s*{re.escape(label)}\s*）", "", s)
 
-        s = re.sub(r"（\s*）", "", s)
-        s = re.sub(r"(）)\s+(（)", r"\1\2", s)
-        s = re.sub(r"\s{2,}", " ", s).strip()
+        s = RE_EMPTY_CN_TAG.sub("", s)
+        s = RE_ADJACENT_TAG_SPACE.sub(r"\1\2", s)
+        s = RE_MULTI_SPACES.sub(" ", s).strip()
 
         # 开头最多保留 2 个标签
-        m = re.match(r"^((?:（[^（）\n]{1,24}）)+)(.*)$", s)
+        m = RE_LEADING_TAGS.match(s)
         if m:
-            tags = re.findall(r"（[^（）\n]{1,24}）", m.group(1))
+            tags = RE_LEADING_TAG.findall(m.group(1))
             tags = self._dedupe_tags(tags)[:2]
             s = "".join(tags) + m.group(2)
         return s.strip()
@@ -479,9 +798,42 @@ class MimoTTSDecorator(Star):
         return base_prompt.strip()
 
     async def _auto_tag_llm(self, text: str) -> str:
+        provider_id = self._get_tagger_provider_id()
+        if provider_id:
+            timeout = int(self._cfg("tagger_timeout_seconds", 45))
+            try:
+                llm_resp = await asyncio.wait_for(
+                    self.context.llm_generate(
+                        chat_provider_id=provider_id,
+                        prompt=text,
+                        system_prompt=self._compose_tagger_system_prompt(),
+                    ),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError as e:
+                raise RuntimeError(
+                    "自动标签提供商调用超时"
+                    f"(provider_id={provider_id}, timeout={timeout}s)"
+                ) from e
+            except Exception as e:
+                raise RuntimeError(
+                    f"自动标签提供商调用失败(provider_id={provider_id}): {e}"
+                ) from e
+            content = (getattr(llm_resp, "completion_text", "") or "").strip()
+            if not content:
+                raise RuntimeError(
+                    f"自动标签提供商返回了空文本(provider_id={provider_id})"
+                )
+            content = self._cleanup_generated_tag_text(content)
+            if not content:
+                raise RuntimeError("Tagger 返回了空文本")
+            self._log_llm_tagged_text(content)
+            return content
+
         if not self._is_tagger_configured():
             raise RuntimeError(
                 "自动标签 LLM 模式已开启，但 "
+                "tagger_provider_id 或 "
                 "tagger_api_key / tagger_base_url / "
                 "tagger_model 未配置完整"
             )
@@ -503,13 +855,7 @@ class MimoTTSDecorator(Star):
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.post(base_url, headers=headers, json=payload)
-
-        if resp.status_code >= 400:
-            raise RuntimeError(f"Tagger HTTP {resp.status_code}: {resp.text[:300]}")
-
-        data = resp.json()
+        data = await self._post_json("Tagger", base_url, headers, payload, timeout)
         try:
             content = data["choices"][0]["message"]["content"]
         except Exception as e:
@@ -610,6 +956,60 @@ class MimoTTSDecorator(Star):
         return built
 
     async def _call_mimo_tts(self, text: str) -> str:
+        assistant_text = await self._prepare_assistant_text(text)
+        if not assistant_text:
+            raise RuntimeError("待合成文本为空")
+
+        selected_tts_provider = self._get_selected_tts_provider()
+        if (
+            selected_tts_provider is not None
+            and self._is_selected_provider_mimo_tts(selected_tts_provider)
+        ):
+            mimo_settings = self._resolve_mimo_request_settings_from_provider(
+                selected_tts_provider
+            )
+            return await self._call_mimo_http(
+                assistant_text,
+                api_key=mimo_settings["api_key"],
+                base_url=mimo_settings["base_url"],
+                model=mimo_settings["model"],
+                voice=mimo_settings["voice"],
+                audio_format=mimo_settings["format"],
+            )
+
+        if selected_tts_provider is not None:
+            timeout = int(self._cfg("timeout_seconds", 60))
+            try:
+                provider_audio = await asyncio.wait_for(
+                    selected_tts_provider.get_audio(assistant_text),
+                    timeout=timeout,
+                )
+                if not provider_audio:
+                    raise RuntimeError("官方 TTS 提供商返回了空音频路径")
+                copied_audio = self._copy_audio_into_temp_dir(provider_audio)
+                normalized_audio = self._normalize_audio_for_qq(copied_audio)
+                if normalized_audio != copied_audio and os.path.isfile(copied_audio):
+                    try:
+                        os.remove(copied_audio)
+                    except OSError:
+                        pass
+                if not self._looks_like_wav_file(normalized_audio):
+                    raise RuntimeError(
+                        "官方 TTS 提供商返回的音频不是可识别的 WAV 文件，"
+                        "当前无法发送为 QQ 语音"
+                    )
+                return normalized_audio
+            except asyncio.TimeoutError as e:
+                raise RuntimeError(
+                    "官方 TTS 提供商调用超时"
+                    f"(provider_id={self._get_tts_provider_id()}, timeout={timeout}s)"
+                ) from e
+            except Exception as e:
+                raise RuntimeError(
+                    "官方 TTS 提供商调用失败"
+                    f"(provider_id={self._get_tts_provider_id()}): {e}"
+                ) from e
+
         api_key = (self._cfg("api_key", "") or "").strip()
         if not api_key:
             raise RuntimeError("MiMo API Key 未配置")
@@ -617,73 +1017,14 @@ class MimoTTSDecorator(Star):
         base_url = (self._cfg("base_url", "") or "").strip()
         if not base_url:
             raise RuntimeError("MiMo base_url 未配置")
-
-        assistant_text = await self._prepare_assistant_text(text)
-        if not assistant_text:
-            raise RuntimeError("待合成文本为空")
-
-        payload = {
-            "model": self._cfg("model", "mimo-v2-tts"),
-            "messages": [
-                {
-                    "role": "user",
-                    "content": self._cfg(
-                        "dummy_user_prompt",
-                        "请把 assistant 提供的文本转成自然、清晰、"
-                        "稳定的普通话语音，"
-                        "不要改写 assistant 文本。",
-                    ),
-                },
-                {
-                    "role": "assistant",
-                    "content": assistant_text,
-                },
-            ],
-            "audio": {
-                "format": self._cfg("format", "wav"),
-                "voice": self._cfg("voice", "default_zh"),
-            },
-            "temperature": 0,
-        }
-
-        timeout = int(self._cfg("timeout_seconds", 60))
-        headers = {
-            "api-key": api_key,
-            "Content-Type": "application/json",
-        }
-
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.post(base_url, headers=headers, json=payload)
-
-        content_type = resp.headers.get("content-type", "")
-        if resp.status_code >= 400:
-            body_preview = resp.text[:300]
-            raise RuntimeError(
-                f"MiMo HTTP {resp.status_code}, content-type={content_type}, "
-                f"body={body_preview}"
-            )
-
-        if "html" in content_type.lower():
-            raise RuntimeError(f"MiMo 返回了 HTML 而不是 JSON：{resp.text[:300]}")
-
-        data = resp.json()
-
-        try:
-            audio_b64 = data["choices"][0]["message"]["audio"]["data"]
-        except Exception as e:
-            raise RuntimeError(f"MiMo 响应里没有 audio.data：{data}") from e
-
-        raw = base64.b64decode(audio_b64)
-        if len(raw) < 64:
-            raise RuntimeError("MiMo 返回的音频过小，疑似无效响应")
-
-        if not (raw[:4] == b"RIFF" and raw[8:12] == b"WAVE"):
-            raise RuntimeError("MiMo 返回内容不是标准 WAV（缺少 RIFF/WAVE 头）")
-
-        path = os.path.join(self.temp_dir, f"mimo_tts_{uuid.uuid4().hex}.wav")
-        with open(path, "wb") as f:
-            f.write(raw)
-        return path
+        return await self._call_mimo_http(
+            assistant_text,
+            api_key=api_key,
+            base_url=base_url,
+            model=self._cfg("model", "mimo-v2-tts"),
+            voice=self._cfg("voice", "default_zh"),
+            audio_format=self._cfg("format", "wav"),
+        )
 
     @filter.command("mimo_tts_preview_text")
     async def mimo_tts_preview_text(self, event: AstrMessageEvent, text: str):
@@ -779,4 +1120,7 @@ class MimoTTSDecorator(Star):
         self._cleanup_tracked_event_files(event)
 
     async def terminate(self):
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
         logger.info("[mimo_tts_decorator] terminate")

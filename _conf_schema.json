@@ -9,24 +9,31 @@
     "type": "bool",
     "default": true
   },
+  "tts_provider_id": {
+    "description": "TTS 提供商（官方选择器）",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider_tts",
+    "hint": "AstrBot 官方推荐方式。选择后，插件会优先读取你在 WebUI 的“模型提供商 -> 文字转语音”里已经配置好的 TTS 提供商。若选中的是官方 MiMo TTS，插件会直接复用那里的 API 配置来走本插件自己的增强合成链路，因此不需要在本插件里重复填写 API Key。未选择时，才会继续使用下面的 MiMo 直连配置。"
+  },
   "api_key": {
-    "description": "MiMo API Key",
+    "description": "MiMo API Key（直连模式）",
     "type": "string",
     "hint": "小米 MiMo 平台 API Key",
     "password": true
   },
   "base_url": {
-    "description": "MiMo Chat Completions 地址",
+    "description": "MiMo Chat Completions 地址（直连模式）",
     "type": "string",
     "default": "https://api.xiaomimimo.com/v1/chat/completions"
   },
   "model": {
-    "description": "TTS 模型",
+    "description": "TTS 模型（直连模式）",
     "type": "string",
     "default": "mimo-v2-tts"
   },
   "voice": {
-    "description": "音色",
+    "description": "音色（直连模式）",
     "type": "string",
     "default": "default_zh",
     "options": [
@@ -34,10 +41,10 @@
       "mimo_default",
       "default_en"
     ],
-    "hint": "当前官方公开可用音色一般就是：default_zh / mimo_default / default_en。中文主场景建议优先用 default_zh。"
+    "hint": "当前官方公开可用音色一般就是：default_zh / mimo_default / default_en。中文主场景建议优先用 default_zh。只有在未选择官方 TTS 提供商时，这里的值才会生效。"
   },
   "format": {
-    "description": "输出格式",
+    "description": "输出格式（直连模式）",
     "type": "string",
     "default": "wav",
     "options": [
@@ -180,28 +187,35 @@
     "type": "string",
     "default": "（紧张，深呼吸）"
   },
+  "tagger_provider_id": {
+    "description": "自动标签 LLM 提供商（官方选择器）",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "AstrBot 官方推荐方式。选择后，插件会直接调用你在 WebUI 已配置好的大语言模型提供商；未选择时，才会继续看下面的 OpenAI 兼容配置。"
+  },
   "tagger_api_key": {
-    "description": "自动标签 LLM 的 API Key（仅 llm 模式使用）",
+    "description": "自动标签 LLM 的 API Key（OpenAI 兼容回退模式）",
     "type": "string",
     "password": true
   },
   "tagger_base_url": {
-    "description": "自动标签 LLM 的 OpenAI 兼容 chat/completions 地址",
+    "description": "自动标签 LLM 的 OpenAI 兼容 chat/completions 地址（回退模式）",
     "type": "string",
     "default": "http://xxx.xxx.xxx/v1/chat/completions"
   },
   "tagger_model": {
-    "description": "自动标签 LLM 模型名",
+    "description": "自动标签 LLM 模型名（回退模式）",
     "type": "string",
     "default": "gemini-3-flash-preview"
   },
   "tagger_temperature": {
-    "description": "自动标签 LLM temperature",
+    "description": "自动标签 LLM temperature（OpenAI 兼容回退模式）",
     "type": "float",
     "default": 0.3
   },
   "tagger_timeout_seconds": {
-    "description": "自动标签 LLM 超时（秒）",
+    "description": "自动标签 LLM 超时（秒，官方选择器和回退模式都生效）",
     "type": "int",
     "default": 45
   },
@@ -235,7 +249,7 @@
     "hint": "用于清理异常退出后遗留的历史文件。设为 0 或负数可关闭启动清理。"
   },
   "timeout_seconds": {
-    "description": "MiMo HTTP 超时（秒）",
+    "description": "主 TTS 超时（秒，官方提供商和直连模式都生效）",
     "type": "int",
     "default": 60
   },
@@ -264,7 +278,7 @@
     "default": true
   },
   "dummy_user_prompt": {
-    "description": "发送给 MiMo 的 user 旁带提示",
+    "description": "发送给 MiMo 的 user 旁带提示（直连模式）",
     "type": "string",
     "default": "请把 assistant 提供的文本转成自然、清晰、稳定的普通话语音，不要改写 assistant 文本。",
     "hint": "它不会被念出来，而是作为 user 角色的旁带说明，告诉 MiMo 如何处理 assistant 角色里的目标文本。按官方文档，真正要被合成的文本应放在 assistant role。"

@@ -1,19 +1,15 @@
-# MiMo TTS 装饰器 v0.6.3
+# MiMo TTS 装饰器 v1.0.0
 
-<img width="427" height="62" alt="image" src="https://github.com/user-attachments/assets/dbe01121-b3fc-487e-8d90-661f1e505eb3" />
-使用这个插件需要在普通配置里关闭TTS总开关
-
-这个版本重点做了 6 件事：
+这个版本重点做了 8 件事：
 
 - 默认把临时 wav 放到 AstrBot 的 `data/plugin_data/{plugin_name}/temp`
 - 新增临时 wav 自动回收，避免机器人长期运行后持续占磁盘
 - `replace_plain` 模式下保留原消息链里的 `At` / `Reply`
+- 主 TTS 也支持 AstrBot 官方“文字转语音提供商”选择器
+- 自动标签 LLM 支持 AstrBot 官方“选择提供商”选择器
 - 新增 `auto_tag_density`，让自动打标更接近 MiMo 官方示例的标签密度
 - 保留并延续 0.5.x 的自动打标、style、语速和朗读清洗能力
 - 补充 `ruff` / `pyproject.toml` / `.gitignore`，更适合提交和发布
-<img width="893" height="863" alt="image" src="https://github.com/user-attachments/assets/acd87c8f-6e11-48ef-bcf9-5d0b5666c3eb" />
-<img width="887" height="857" alt="image" src="https://github.com/user-attachments/assets/8021c0c1-c28d-4b54-8d74-eb59ced74455" />
-<img width="898" height="863" alt="image" src="https://github.com/user-attachments/assets/e3a581ae-6499-41ce-b548-c5f838cb7077" />
 
 ---
 
@@ -134,7 +130,24 @@ MiMo 官方语音合成接口不是直接喂“纯文本”就完事，而是更
 - 真正要读的内容放 `assistant`
 - `user` 可以放背景说明，也可以省略
 
-### 5. 临时音频目录与回收
+### 5. 主 TTS 现在也支持 AstrBot 官方提供商选择器
+
+现在插件支持两种主 TTS 接入方式：
+
+- 优先方式：`tts_provider_id`
+  也就是 AstrBot 官方“模型提供商 -> 文字转语音”里的选择器。选中后，插件会直接读取你已经在 AstrBot WebUI 里配置好的 TTS 提供商；如果选中的正好是官方 `MiMo TTS(API)`，插件会进一步复用它保存的 MiMo 配置，改走本插件自己的增强合成链路，所以插件页面里可以不再重复填写 MiMo API Key。
+- 高级直连方式：`api_key` + `base_url` + `model`
+  这是插件原本的 MiMo 直连模式。只有在没选 `tts_provider_id` 时才会使用。
+
+两种方式的差异：
+
+- 选择官方 TTS 提供商时，插件仍然会保留自己的 `<style>`、自动打标、朗读清洗这些增强能力
+- 如果选中的是官方 `MiMo TTS(API)`，插件会优先复用它保存的 MiMo 配置，再走本插件自己的 `chat/completions` 请求，这样通常比直接吃官方 provider 产出的成品音频更稳
+- 但 `voice`、`model`、`dummy_user_prompt` 这类 MiMo 直连参数，会交给 AstrBot 官方 TTS 提供商自身配置管理
+- 如果系统里有 `ffmpeg`，插件会优先把官方 provider 返回的音频规范成更稳妥的单声道 PCM WAV，再交给 QQ 发语音
+- 如果你想完全保留插件这套 MiMo `chat/completions` 直连细节控制，就继续用直连模式
+
+### 6. 临时音频目录与回收
 
 - `temp_dir` 留空时，会自动使用 AstrBot 的 `data/plugin_data/{plugin_name}/temp`
 - 每次发送成功后，插件会自动删除本次生成的临时 wav
@@ -213,11 +226,22 @@ MiMo 官方语音合成接口不是直接喂“纯文本”就完事，而是更
 
 默认推荐：
 
-- `tagger_model = gemini-3-flash-preview`
-- `tagger_temperature = 0.3`
+- `tagger_provider_id = 在 AstrBot WebUI 里直接选择提供商`
 - `tagger_timeout_seconds = 45`
 
-如果 `tagger_api_key`、真实 `tagger_base_url`、`tagger_model` 没配完整，插件会自动回退到规则模式，不会直接把消息搞坏。
+如果你仍然使用旧版 OpenAI 兼容回退模式，再补：
+
+- `tagger_model = gemini-3-flash-preview`
+- `tagger_temperature = 0.3`
+
+现在插件支持两种 LLM 接入方式：
+
+- 优先方式：`tagger_provider_id`
+  也就是 AstrBot 官方的“选择提供商”选择器。选中后，插件会直接调用你在 AstrBot WebUI 里已经配置好的提供商。
+- 兼容回退：`tagger_api_key` + `tagger_base_url` + `tagger_model`
+  这是旧版 OpenAI 兼容 `chat/completions` 写法，只有在没选 `tagger_provider_id` 时才会使用。
+
+如果 `tagger_provider_id` 没选，且 `tagger_api_key`、真实 `tagger_base_url`、`tagger_model` 也没配完整，插件会自动回退到规则模式，不会直接把消息搞坏。
 
 ### “更严格的 LLM 打标约束”
 
@@ -274,8 +298,8 @@ MiMo 官方语音合成接口不是直接喂“纯文本”就完事，而是更
 - `auto_tag_enabled = 开`
 - `auto_tag_mode = llm`
 - `auto_tag_density = aggressive`
+- `tagger_provider_id = 在 WebUI 里选择一个稳定的聊天模型`
 - `tagger_strict_guidance_enabled = 开`
-- `tagger_model = gemini-3-flash-preview`
 - `auto_tag_profile = catgirl_soft`
 
 ### 方案 B：更元气
